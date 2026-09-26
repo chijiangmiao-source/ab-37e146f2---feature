@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LR(1) 文法复核台</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+<a class="skip-link" href="#grammar-form">跳到文法输入</a>
+<header class="site-header">
+  <h1>LR(1) 文法复核台</h1>
+  <p class="subtitle">上线前复核文法，定位非法符号、未定义引用、重复产生式与不可达起始规则，并构造规范 LR(1) 项目集与动作表。</p>
+</header>
+
+<main class="layout">
+  <section class="panel" aria-labelledby="form-title">
+    <h2 id="form-title">文法输入</h2>
+    <form id="grammar-form" novalidate>
+      <div class="field">
+        <label for="terminals">终结符</label>
+        <input id="terminals" name="terminals" type="text" autocomplete="off"
+               aria-describedby="terminals-help"
+               placeholder="例如：id + * ( )">
+        <small id="terminals-help">以空格或逗号分隔，多字符符号直接书写，如 <code>ELSE</code>。</small>
+      </div>
+      <div class="field">
+        <label for="nonterminals">非终结符</label>
+        <input id="nonterminals" name="nonterminals" type="text" autocomplete="off"
+               aria-describedby="nonterminals-help"
+               placeholder="例如：E T F">
+        <small id="nonterminals-help">以空格或逗号分隔；不得与终结符重名。</small>
+      </div>
+      <div class="field">
+        <label for="start">起始符</label>
+        <input id="start" name="start" type="text" autocomplete="off"
+               placeholder="例如：E">
+      </div>
+      <div class="field">
+        <label for="productions">产生式（每行一条）</label>
+        <textarea id="productions" name="productions" rows="10" spellcheck="false"
+                  aria-describedby="productions-help"
+                  placeholder="E -&gt; E + T&#10;E -&gt; T&#10;T -&gt; ε"></textarea>
+        <small id="productions-help">
+          箭头可用 <code>-&gt;</code>、<code>::=</code> 或 <code>→</code>；右部符号以空格分隔；
+          独立的 <code>|</code> 分隔候选项；空右部、<code>ε</code> 或 <code>eps</code> 表示空产生式；
+          以 <code>#</code> 或 <code>//</code> 开头的行为注释。
+        </small>
+      </div>
+      <div class="actions">
+        <button id="submit-btn" type="submit" class="primary">发起复核</button>
+        <button id="cancel-btn" type="button" disabled>取消计算</button>
+        <button id="clear-btn" type="button">清空草稿</button>
+        <button id="example-btn" type="button">填入示例</button>
+      </div>
+      <p id="draft-hint" class="draft-hint" role="status" aria-live="polite"></p>
+    </form>
+  </section>
+
+  <section class="panel" aria-labelledby="result-title">
+    <h2 id="result-title">复核结论</h2>
+    <div id="status-region" role="status" aria-live="polite"></div>
+
+    <div id="error-panel" class="result-block" hidden>
+      <h3 class="error-heading">文法问题（需先修正）</h3>
+      <ul id="error-list"></ul>
+      <h3 class="warning-heading" id="warning-heading" hidden>告警（不阻塞构造）</h3>
+      <ul id="warning-list"></ul>
+    </div>
+
+    <div id="summary-panel" class="result-block" hidden></div>
+
+    <div id="conflict-panel" class="result-block" hidden></div>
+
+    <details id="nullable-details" class="result-block" hidden>
+      <summary><h3 style="display:inline">Nullable 与 FIRST 集合</h3></summary>
+      <div id="nullable-first"></div>
+    </details>
+
+    <details id="states-details" class="result-block" hidden>
+      <summary><h3 style="display:inline">规范 LR(1) 项目集（稳定编号）</h3></summary>
+      <div id="states"></div>
+    </details>
+
+    <details id="table-details" class="result-block" hidden>
+      <summary><h3 style="display:inline">ACTION / GOTO 动作表</h3></summary>
+      <div class="table-wrap" id="action-table"></div>
+    </details>
+  </section>
+</main>
+
+<footer class="site-footer">
+  <p>草稿仅保存在本浏览器（localStorage）中。健康检查：<code>/healthz</code>。</p>
+</footer>
+
+<script src="app.js"></script>
+</body>
+</html>

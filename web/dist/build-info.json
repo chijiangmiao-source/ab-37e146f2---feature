@@ -1,0 +1,20 @@
+{
+  "builtAt": "2026-09-25T00:11:45.606Z",
+  "files": [
+    {
+      "name": "index.html",
+      "bytes": 4245,
+      "sha256": "de734ce727ab88634eea91707aaef49371419409d62961d0e4b9e97c43f7ed6c"
+    },
+    {
+      "name": "app.js",
+      "bytes": 15939,
+      "sha256": "d89de75de8ccf4861bad2d81c290e4b6c7985a5aff9112a289ded2105c18f731"
+    },
+    {
+      "name": "styles.css",
+      "bytes": 7398,
+      "sha256": "4174e51895b8949d384e0a7cc6e822056c758e38ff02aeab62de4a16f0a9a181"
+    }
+  ]
+}

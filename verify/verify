@@ -1,0 +1,39 @@
+#!/bin/sh
+# One-shot acceptance entry point named `verify`.
+#
+# Runs the three acceptance phases (code tests, page build check, API/HTTP
+# smoke) and exits non-zero when any check fails.
+#
+# Usage:
+#   ./verify/verify                              # builds page, boots a local app server, tests, tears down
+#   APP_URL=http://host:3000 ./verify/verify     # tests an already-running instance
+#
+set -eu
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT"
+
+SERVER_PID=""
+SERVER_LOG="$(mktemp -t lr1-verify-server.XXXXXX.log)"
+cleanup() {
+  if [ -n "$SERVER_PID" ]; then
+    kill "$SERVER_PID" 2>/dev/null || true
+    wait "$SERVER_PID" 2>/dev/null || true
+  fi
+  rm -f "$SERVER_LOG" 2>/dev/null || true
+}
+trap cleanup EXIT INT TERM
+
+if [ -z "${APP_URL:-}" ]; then
+  echo "[verify] APP_URL not set; building page and starting local app server"
+  node web/build.js --check
+  PORT="${PORT:-3000}"
+  # Redirect the server's stdio to a log file so it cannot keep piped stdout
+  # (e.g. `./verify/verify | tail`) open after verification finishes.
+  WEB_DIR="$ROOT/web/dist" PORT="$PORT" node server/src/index.js >"$SERVER_LOG" 2>&1 &
+  SERVER_PID=$!
+  export APP_URL="http://127.0.0.1:${PORT}"
+fi
+
+# Run in this shell (no exec) so the EXIT trap tears the server down.
+node verify/verify.js

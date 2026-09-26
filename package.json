@@ -1,0 +1,12 @@
+{
+  "name": "lr1-grammar-review",
+  "version": "1.0.0",
+  "private": true,
+  "description": "LR(1) grammar review workbench for wire-harness control scripts",
+  "scripts": {
+    "start": "node server/src/index.js",
+    "build": "node web/build.js --check",
+    "test": "node --test server/test/",
+    "verify": "./verify/verify"
+  }
+}

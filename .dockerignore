@@ -1,0 +1,7 @@
+# 忽略运行时产物，保持构建上下文精简
+.git
+node_modules
+web/dist
+*.log
+.DS_Store
+verify/*.log
