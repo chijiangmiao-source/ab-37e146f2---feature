@@ -260,6 +260,62 @@ details.result-block > summary h3 { display: inline; }
   font-style: italic;
 }
 
+/* ---- precedence / associativity audit strategy ---- */
+.strategy-card {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 14px;
+  background: #fff;
+}
+.strategy-card.resolved { border-color: #bfe3cc; background: var(--ok-bg); }
+.strategy-card.resolved h3 { color: var(--ok); }
+.strategy-card.unresolvable { border-color: #ecc7c7; background: var(--err-bg); }
+.strategy-card.unresolvable h3 { color: var(--err); }
+.strategy-card.unneeded { border-color: #bfe3cc; background: var(--ok-bg); }
+.strategy-card.unneeded h3 { color: var(--ok); }
+.strategy-note { font-size: 0.88rem; }
+.strategy-card table {
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  margin: 6px 0 10px;
+  background: #fff;
+}
+.strategy-card td, .strategy-card th {
+  border: 1px solid var(--line);
+  padding: 4px 10px;
+  text-align: left;
+}
+.strategy-card th { background: #f0f2f7; }
+.strategy-card td.sym { font-family: ui-monospace, Menlo, Consolas, monospace; font-weight: 600; }
+.decision-list { padding-left: 20px; font-size: 0.86rem; }
+.decision-list li { margin-bottom: 8px; padding: 8px 10px; border-radius: 6px; background: #fff; border: 1px solid var(--line); }
+.decision-list li.unresolved { border-color: #ecc7c7; background: var(--err-bg); }
+.decision-head { font-weight: 600; margin-bottom: 4px; }
+.decision-actions { margin-bottom: 2px; }
+.act-chip {
+  display: inline-block;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.78rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  margin-right: 6px;
+  color: #fff;
+}
+.act-chip.shift { background: var(--shift); }
+.act-chip.reduce { background: var(--reduce); }
+.act-chip.accept { background: var(--accept); }
+.decision-prec, .decision-basis { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 0.82rem; }
+.decision-items {
+  margin: 4px 0;
+  padding-left: 18px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+.decision-final { font-weight: 700; margin: 2px 0; }
+.decision-final.none { color: var(--err); }
+.decision-reason { color: var(--muted); }
+
 .site-footer {
   max-width: 1200px;
   margin: 0 auto;

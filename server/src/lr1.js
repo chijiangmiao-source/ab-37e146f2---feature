@@ -1,9 +1,16 @@
 'use strict';
 
+const { resolveConflicts } = require('./resolver');
+
 /**
  * Canonical LR(1) construction: nullable, FIRST, closure, goto, item-set
  * collection with stable (deterministic) numbering, ACTION/GOTO tables and
  * deterministic first-conflict reporting with verifiable prefix evidence.
+ *
+ * When the canonical table contains conflicts, a stable precedence /
+ * associativity policy is additionally derived (minimum number of precedence
+ * levels, ties by terminal associativity) and every conflict is itemised with
+ * the levels used and the final action; see server/src/resolver.js.
  */
 
 /**
@@ -32,6 +39,10 @@ function analyzeGrammar(grammar) {
   const symbolOrder = new Map([...nonterminals, ...terminals].map((s, i) => [s, i]));
   const byTermOrder = (a, b) => (termOrder.get(a) ?? 1e9) - (termOrder.get(b) ?? 1e9);
   const bySymbolOrder = (a, b) => (symbolOrder.get(a) ?? 1e9) - (symbolOrder.get(b) ?? 1e9);
+
+  // Separator for composite (state, terminal) map keys; a terminal token can
+  // never contain this unit-separator control character.
+  const CELL_SEP = String.fromCharCode(0x1f);
 
   // ---- nullable -----------------------------------------------------------
   const nullable = new Set();
@@ -221,6 +232,41 @@ function analyzeGrammar(grammar) {
   }
   conflicts.sort((a, b) => a.state - b.state || byTermOrder(a.lookahead, b.lookahead));
 
+  // Rightmost terminal of a production anchors its precedence (yacc rule:
+  // precedence of `A -> ... X` is the precedence of the last terminal X).
+  const rightmostTerminal = (p) => {
+    for (let i = p.rhs.length - 1; i >= 0; i -= 1) {
+      if (T.has(p.rhs[i])) return p.rhs[i];
+    }
+    return null;
+  };
+  const prodRightmost = productions.map(rightmostTerminal);
+
+  const classifyType = (entries) => {
+    const types = entries.map((e) => e.action.type);
+    if (types.includes('shift') && types.includes('reduce')) return 'shift-reduce';
+    if (types.every((t) => t === 'reduce')) return 'reduce-reduce';
+    return types.join('-');
+  };
+
+  // Resolver input: candidates in the SAME sorted order as `entries`
+  // (shift first, then reduces by production number).
+  const resolverConflicts = conflicts.map((c) => ({
+    state: c.state,
+    lookahead: c.lookahead,
+    candidates: c.entries.map((e) => ({
+      kind: e.action.type === 'shift' ? 'shift' : e.action.type === 'reduce' ? 'reduce' : 'accept',
+      prodIndex: e.action.type === 'reduce' ? e.action.production : null,
+      symbol: e.action.type === 'shift'
+        ? c.lookahead
+        : e.action.type === 'reduce'
+          ? prodRightmost[e.action.production]
+          : null,
+    })),
+  }));
+
+  const strategyRaw = resolveConflicts(resolverConflicts, { terminals: [...terminals, END] });
+
   // Verifiable prefix evidence: shortest symbol path from state 0 to `target`.
   function prefixTo(target) {
     const prev = new Array(states.length).fill(null);
@@ -264,13 +310,7 @@ function analyzeGrammar(grammar) {
   if (conflicts.length > 0) {
     const c = conflicts[0];
     const pair = c.entries.slice(0, 2);
-    const types = pair.map((e) => e.action.type);
-    const type =
-      types.includes('shift') && types.includes('reduce')
-        ? 'shift-reduce'
-        : types.every((t) => t === 'reduce')
-          ? 'reduce-reduce'
-          : types.join('-');
+    const type = classifyType(pair);
     const prefix = prefixTo(c.state);
     firstConflict = {
       type,
@@ -278,6 +318,9 @@ function analyzeGrammar(grammar) {
       lookahead: c.lookahead,
       actions: pair.map((e) => ({
         ...describeAction(e.action),
+        symbol: e.action.type === 'shift'
+          ? c.lookahead
+          : e.action.type === 'reduce' ? prodRightmost[e.action.production] : null,
         items: e.items.map((it) => ({ prod: it.prod, dot: it.dot, la: it.la, text: itemText(it) })),
       })),
       stateItems: states[c.state].map((it) => ({
@@ -295,18 +338,86 @@ function analyzeGrammar(grammar) {
     };
   }
 
+  // ---- stable precedence / associativity policy, itemised per conflict -----
+  // Re-serialise every decision with the competing actions/items, levels and
+  // final action so the UI can present the audit item by item.
+  const auditConflicts = conflicts.map((c, idx) => {
+    const entries = c.entries.slice().sort(compareActions);
+    const decision = strategyRaw.decisions[idx];
+    const winnerEntry = decision && decision.resolvable ? entries[decision.winnerIndex] : null;
+    const winnerAction = winnerEntry ? describeAction(winnerEntry.action) : null;
+    return {
+      state: c.state,
+      lookahead: c.lookahead,
+      type: classifyType(entries),
+      actions: entries.map((e) => ({
+        ...describeAction(e.action),
+        symbol: e.action.type === 'shift'
+          ? c.lookahead
+          : e.action.type === 'reduce' ? prodRightmost[e.action.production] : null,
+        items: e.items.map((it) => ({ prod: it.prod, dot: it.dot, la: it.la, text: itemText(it) })),
+      })),
+      prefix: prefixTo(c.state),
+      resolution: decision
+        ? {
+            resolvable: decision.resolvable,
+            basis: decision.basis, // 'level' | 'associativity' | null
+            associativity: decision.associativity, // 'left' | 'right' | null
+            precedence: decision.precedence, // per-candidate {side,symbol,level}
+            finalAction: winnerAction,
+            reasonCode: decision.reasonCode,
+            reasonText: decision.reasonText,
+          }
+        : null,
+    };
+  });
+
+  const strategy = {
+    status: strategyRaw.status, // 'unneeded' | 'resolved' | 'unresolvable'
+    exact: strategyRaw.exact,
+    levelCount: strategyRaw.levels.length,
+    levels: strategyRaw.levels,
+    conflicts: auditConflicts,
+    resolvedConflictCount: strategyRaw.decisions.filter((d) => d.resolvable).length,
+    unresolvedConflictCount: strategyRaw.decisions.filter((d) => !d.resolvable).length,
+    note: strategyRaw.note,
+  };
+
   // ---- serialize ------------------------------------------------------------
+  // Raw table: every competing action is kept (conflicts visible).
+  const serializeCell = (entries) => entries.slice().sort(compareActions).map((e) => describeAction(e.action));
   const actionTable = tables.map((row) => {
     const actions = {};
     for (const t of [...row.cells.keys()].sort(byTermOrder)) {
-      actions[t] = row.cells
-        .get(t)
-        .slice()
-        .sort(compareActions)
-        .map((e) => describeAction(e.action));
+      actions[t] = serializeCell(row.cells.get(t));
     }
     return { state: row.state, actions, gotos: row.gotos };
   });
+
+  // Resolved table: each audited conflict cell is collapsed to the chosen
+  // action; unresolvable cells keep ALL competing actions (no default shift,
+  // no production-order tie-break).  Non-conflict cells are copied verbatim,
+  // so where no strategy is needed the table stays identical to the raw one.
+  const winnerByCell = new Map(); // state + lookahead -> winner entry
+  auditConflicts.forEach((ac, idx) => {
+    if (!ac.resolution.resolvable) return;
+    const decision = strategyRaw.decisions[idx];
+    const entries = conflicts[idx].entries.slice().sort(compareActions);
+    winnerByCell.set([ac.state, ac.lookahead].join(CELL_SEP), entries[decision.winnerIndex]);
+  });
+  const resolvedActionTable = tables.map((row) => {
+    const actions = {};
+    for (const t of [...row.cells.keys()].sort(byTermOrder)) {
+      const entries = row.cells.get(t);
+      const winner = winnerByCell.get([row.state, t].join(CELL_SEP));
+      actions[t] = winner ? [describeAction(winner.action)] : serializeCell(entries);
+    }
+    return { state: row.state, actions, gotos: row.gotos };
+  });
+
+  // Table consistency claim for conflict-free grammars: no strategy needed
+  // and the audited table equals the canonical review table cell for cell.
+  strategy.tableMatchesReview = conflicts.length === 0;
 
   const statesOut = states.map((items, i) => ({
     id: i,
@@ -340,6 +451,8 @@ function analyzeGrammar(grammar) {
     })),
     states: statesOut,
     actionTable,
+    resolvedActionTable,
+    strategy,
     terminals: [...terminals, END],
     nonterminals,
     conflictFree: conflicts.length === 0,

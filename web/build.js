@@ -32,7 +32,7 @@ function parseArgs(argv) {
   return args;
 }
 
-const REQUIRED = ['index.html', 'app.js', 'styles.css'];
+const REQUIRED = ['index.html', 'stale-guard.js', 'app.js', 'styles.css'];
 
 function sha256(buf) {
   return crypto.createHash('sha256').update(buf).digest('hex');
@@ -55,11 +55,13 @@ function main() {
   }
 
   // 2. JavaScript parses
-  const appJs = path.join(srcDir, 'app.js');
-  try {
-    execFileSync(process.execPath, ['--check', appJs], { stdio: 'pipe' });
-  } catch (err) {
-    fail(`app.js does not parse: ${err.stderr ? err.stderr.toString() : err.message}`);
+  for (const name of REQUIRED.filter((f) => f.endsWith('.js'))) {
+    const jsPath = path.join(srcDir, name);
+    try {
+      execFileSync(process.execPath, ['--check', jsPath], { stdio: 'pipe' });
+    } catch (err) {
+      fail(`${name} does not parse: ${err.stderr ? err.stderr.toString() : err.message}`);
+    }
   }
 
   // 3. HTML references resolve to real files

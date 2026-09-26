@@ -17,12 +17,15 @@
   const warningList = document.getElementById('warning-list');
   const summaryPanel = document.getElementById('summary-panel');
   const conflictPanel = document.getElementById('conflict-panel');
+  const strategyPanel = document.getElementById('strategy-panel');
   const nullableDetails = document.getElementById('nullable-details');
   const nullableFirst = document.getElementById('nullable-first');
   const statesDetails = document.getElementById('states-details');
   const statesEl = document.getElementById('states');
   const tableDetails = document.getElementById('table-details');
   const tableEl = document.getElementById('action-table');
+  const resolvedTableDetails = document.getElementById('resolved-table-details');
+  const resolvedTableEl = document.getElementById('resolved-action-table');
 
   const EXAMPLE = {
     terminals: 'id + * ( )',
@@ -60,18 +63,15 @@
   }
 
   // ---- result versioning: stale results must never overwrite conclusion ----
-  let runSeq = 0;          // bumped on submit
-  let draftGeneration = 0; // bumped on every draft edit
+  const guard = window.LR1RunGuard.createRunGuard();
   let activeController = null;
-  let currentView = null;  // {runId, generation, kind} describing what is on screen
 
   function markStaleIfAny() {
-    if (currentView && !currentView.stale && currentView.generation !== draftGeneration) {
+    if (guard.bumpDraft()) {
       const note = document.createElement('p');
       note.className = 'stale-note';
       note.textContent = '草稿已修改：以下为修改前的过期结果，未用于当前结论。请重新发起复核。';
       statusRegion.prepend(note);
-      currentView.stale = true;
     }
   }
 
@@ -94,7 +94,7 @@
   }
 
   function resetResultPanels() {
-    for (const p of [errorPanel, summaryPanel, conflictPanel, nullableDetails, statesDetails, tableDetails]) {
+    for (const p of [errorPanel, summaryPanel, conflictPanel, strategyPanel, nullableDetails, statesDetails, tableDetails, resolvedTableDetails]) {
       p.hidden = true;
     }
     statusRegion.innerHTML = '';
@@ -200,6 +200,104 @@
     conflictPanel.hidden = false;
   }
 
+  // ---- precedence / associativity audit strategy ---------------------------
+  function assocLabel(assoc) {
+    if (assoc === 'right') return '右结合';
+    if (assoc === 'left') return '左结合';
+    if (assoc === 'none') return '无结合性';
+    return '—';
+  }
+  function basisLabel(c) {
+    if (c.resolution.basis === 'level') return '层级裁决（展望符优先级 vs 产生式最右终结符优先级）';
+    if (c.resolution.basis === 'associativity') return `结合性裁决（${assocLabel(c.resolution.associativity)}）`;
+    return '无可用裁决依据';
+  }
+
+  function renderStrategy(a) {
+    const st = a.strategy;
+    const card = el('div', { class: `strategy-card ${st.status}` });
+    const title = st.status === 'resolved'
+      ? `稳定优先级策略：${st.levelCount} 层，全部 ${st.resolvedConflictCount} 处冲突已唯一落定`
+      : st.status === 'unneeded'
+        ? '无需策略：文法无冲突'
+        : '不存在可覆盖全部冲突的稳定策略';
+    card.appendChild(el('h3', null, document.createTextNode(`审计策略（优先级/结合性）：${title}`)));
+    card.appendChild(el('p', { class: 'strategy-note' }, document.createTextNode(st.note)));
+
+    if (st.status === 'unneeded') {
+      card.appendChild(el('p', null, document.createTextNode(
+        '动作表无需任何裁决，裁决后动作表与规范 LR(1) 复核结果逐项一致。')));
+      strategyPanel.appendChild(card);
+      strategyPanel.hidden = false;
+      return;
+    }
+
+    // Level table
+    if (st.levels.length) {
+      card.appendChild(el('h4', null, document.createTextNode('优先级层级（数字越大优先级越高，层数已取最小值）')));
+      const table = el('table', { class: 'level-table' });
+      table.appendChild(el('thead', null, el('tr', null, [
+        el('th', null, document.createTextNode('层级')),
+        el('th', null, document.createTextNode('终结符')),
+        el('th', null, document.createTextNode('结合性（按终结符编码）')),
+      ])));
+      const tbody = el('tbody');
+      for (const lv of st.levels) {
+        tbody.appendChild(el('tr', null, [
+          el('td', { class: 'sym' }, document.createTextNode(String(lv.level))),
+          el('td', { class: 'sym' }, document.createTextNode(lv.symbols.map((s) => s.symbol).join(' '))),
+          el('td', null, document.createTextNode(
+            lv.symbols.map((s) => `${s.symbol}:${assocLabel(s.associativity)}`).join('　'))),
+        ]));
+      }
+      table.appendChild(tbody);
+      card.appendChild(table);
+    }
+
+    // Itemised decisions
+    card.appendChild(el('h4', null, document.createTextNode('逐项裁决（状态 → 展望符 → 层级/结合性 → 最终动作）')));
+    const list = el('ol', { class: 'decision-list' });
+    for (const c of st.conflicts) {
+      const li = el('li', { class: c.resolution.resolvable ? 'resolved' : 'unresolved' });
+      li.appendChild(el('div', { class: 'decision-head' }, document.createTextNode(
+        `状态 I${c.state}，展望符 ${c.lookahead}（${c.type === 'shift-reduce' ? '移进/归约' : '归约/归约'} 冲突）`)));
+      const comp = el('div', { class: 'decision-actions' });
+      for (const act of c.actions) {
+        comp.appendChild(el('span', { class: `act-chip ${act.type}` }, document.createTextNode(
+          `${act.type === 'shift' ? '移进' : act.type === 'reduce' ? '归约' : '接受'} ${act.short}`)));
+      }
+      li.appendChild(comp);
+      const compItems = el('ul', { class: 'decision-items' });
+      for (const act of c.actions) {
+        for (const it of (act.items || [])) {
+          compItems.appendChild(el('li', null, document.createTextNode(it.text)));
+        }
+      }
+      li.appendChild(compItems);
+      if (c.resolution.precedence) {
+        for (const pr of c.resolution.precedence) {
+          if (!pr) continue;
+          li.appendChild(el('div', { class: 'decision-prec' }, document.createTextNode(
+            `${pr.side === 'lookahead' ? '展望符' : '产生式最右终结符'} ${pr.symbol}：第 ${pr.level ?? '—'} 层`)));
+        }
+      }
+      li.appendChild(el('div', { class: 'decision-basis' }, document.createTextNode(`依据：${basisLabel(c)}`)));
+      if (c.resolution.resolvable) {
+        const fin = c.resolution.finalAction;
+        li.appendChild(el('div', { class: 'decision-final' }, document.createTextNode(
+          `最终动作：${fin.type === 'shift' ? '移进' : '归约'} ${fin.short}`)));
+      } else {
+        li.appendChild(el('div', { class: 'decision-final none' }, document.createTextNode('最终动作：保留全部竞争动作，无策略')));
+      }
+      li.appendChild(el('div', { class: 'decision-reason' }, document.createTextNode(c.resolution.reasonText)));
+      list.appendChild(li);
+    }
+    card.appendChild(list);
+
+    strategyPanel.appendChild(card);
+    strategyPanel.hidden = false;
+  }
+
   function renderNullableFirst(a) {
     nullableFirst.innerHTML = '';
     const table = el('table');
@@ -243,8 +341,17 @@
 
   function renderActionTable(a) {
     tableEl.innerHTML = '';
-    const terminals = a.terminals;
-    const nonterminals = a.nonterminals;
+    renderTableInto(tableEl, a.actionTable, a.terminals, a.nonterminals);
+    tableDetails.hidden = false;
+  }
+
+  function renderResolvedActionTable(a) {
+    resolvedTableEl.innerHTML = '';
+    renderTableInto(resolvedTableEl, a.resolvedActionTable, a.terminals, a.nonterminals);
+    resolvedTableDetails.hidden = false;
+  }
+
+  function renderTableInto(container, rows, terminals, nonterminals) {
     const table = el('table');
     const thead = el('thead');
     const headRow = el('tr', null, [el('th', null, document.createTextNode('状态'))]);
@@ -254,7 +361,7 @@
     table.appendChild(thead);
 
     const tbody = el('tbody');
-    for (const row of a.actionTable) {
+    for (const row of rows) {
       const tr = el('tr');
       tr.appendChild(el('td', { class: 'state-head' }, document.createTextNode(`I${row.state}`)));
       for (const t of terminals) {
@@ -280,13 +387,12 @@
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
-    tableEl.appendChild(table);
-    tableDetails.hidden = false;
+    container.appendChild(table);
   }
 
-  function renderResult(result, runId, generation) {
+  function renderResult(result, token) {
     resetResultPanels();
-    currentView = { runId, generation, stale: false };
+    guard.adoptView(token);
 
     if (!result.ok) {
       renderBanner('error', '文法校验未通过，请修正下列问题后重新复核。');
@@ -303,7 +409,7 @@
     if (a.conflictFree) {
       renderBanner('ok', `复核通过：该文法为 LR(1) 文法，共 ${a.states.length} 个项目集，无移进/归约或归约/归约冲突。`);
     } else {
-      renderBanner('conflict', `复核未通过：动作表存在 ${a.conflictCount} 处冲突，已定位首个冲突及其前缀证据。`);
+      renderBanner('conflict', `复核未通过：动作表存在 ${a.conflictCount} 处冲突，已定位首个冲突、前缀证据与稳定裁决策略。`);
     }
     renderSummary(result);
     if (result.warnings && result.warnings.length) {
@@ -312,9 +418,11 @@
       errorPanel.hidden = false;
     }
     if (!a.conflictFree && a.firstConflict) renderConflict(a.firstConflict);
+    if (a.strategy) renderStrategy(a);
     renderNullableFirst(a);
     renderStates(a);
     renderActionTable(a);
+    renderResolvedActionTable(a);
   }
 
   // ---- submission / cancellation -------------------------------------------
@@ -322,17 +430,16 @@
     saveDraft();
     const spec = {};
     for (const f of fields) spec[f] = document.getElementById(f).value;
-    const runId = ++runSeq;
-    const generation = draftGeneration;
+    const token = guard.beginRun();
     activeController = new AbortController();
     setBusy(true);
     // Keep the previous conclusion on screen while computing; only clear a
     // prior staleness marker (a draft edit during the run re-adds it).
     const oldNote = statusRegion.querySelector('.stale-note');
     if (oldNote) oldNote.remove();
-    if (currentView) currentView.stale = false;
+    guard.markViewFresh();
     const computing = el('div', { class: 'banner info', id: 'computing-banner' },
-      document.createTextNode('正在构造规范 LR(1) 项目集…'));
+      document.createTextNode('正在构造规范 LR(1) 项目集并生成稳定裁决策略…'));
     statusRegion.appendChild(computing);
     try {
       const res = await fetch('/api/review', {
@@ -344,18 +451,18 @@
       const data = await res.json();
       // Stale guard: a cancelled or superseded / edited-draft result must not
       // overwrite the current conclusion.
-      if (runId !== runSeq || generation !== draftGeneration) {
+      if (!guard.isCurrent(token)) {
         return;
       }
-      renderResult(data, runId, generation);
+      renderResult(data, token);
     } catch (err) {
       if (err.name === 'AbortError') return; // explicit cancellation
-      if (runId !== runSeq || generation !== draftGeneration) return;
+      if (!guard.isCurrent(token)) return;
       resetResultPanels();
       renderBanner('error', `复核请求失败：${escapeHtml(err.message)}`);
     } finally {
       computing.remove();
-      if (runId === runSeq) {
+      if (token.runId === guard.runId) {
         activeController = null;
         setBusy(false);
       }
@@ -369,12 +476,11 @@
   });
   cancelBtn.addEventListener('click', () => {
     if (activeController) activeController.abort();
-    runSeq += 1; // invalidate any in-flight response
+    guard.cancelRuns(); // invalidate any in-flight response
     activeController = null;
     setBusy(false);
     resetResultPanels();
     renderBanner('info', '计算已取消，草稿保留未改动。');
-    currentView = null;
   });
   clearBtn.addEventListener('click', () => {
     for (const f of fields) document.getElementById(f).value = '';
@@ -387,7 +493,6 @@
   });
   for (const f of fields) {
     document.getElementById(f).addEventListener('input', () => {
-      draftGeneration += 1;
       saveDraft();
       markStaleIfAny();
     });

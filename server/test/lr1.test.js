@@ -185,3 +185,4 @@ test('goto table drives consistent transitions', () => {  const a = build({
     }
   }
 });
+

@@ -1,20 +1,25 @@
 {
-  "builtAt": "2026-09-25T00:11:45.606Z",
+  "builtAt": "2026-09-26T01:33:21.398Z",
   "files": [
     {
       "name": "index.html",
-      "bytes": 4245,
-      "sha256": "de734ce727ab88634eea91707aaef49371419409d62961d0e4b9e97c43f7ed6c"
+      "bytes": 4675,
+      "sha256": "67138c46e5c4a0436f2117d46aa486a41950217bd1db940122a4cfd7b534c338"
+    },
+    {
+      "name": "stale-guard.js",
+      "bytes": 2589,
+      "sha256": "c2d9a1ca80a8de7d339f4db2f6b9e6157a56575eb778d5c8ece395619f695bf5"
     },
     {
       "name": "app.js",
-      "bytes": 15939,
-      "sha256": "d89de75de8ccf4861bad2d81c290e4b6c7985a5aff9112a289ded2105c18f731"
+      "bytes": 21105,
+      "sha256": "44001b6336bd8a7dc0cc0d17dfe610304e321a1fd3542c09542040bf27b98c7d"
     },
     {
       "name": "styles.css",
-      "bytes": 7398,
-      "sha256": "4174e51895b8949d384e0a7cc6e822056c758e38ff02aeab62de4a16f0a9a181"
+      "bytes": 9491,
+      "sha256": "1fd4b328ce14566bc5e63dbcbb9815fe5651bc256b3d015b2797e913d9d235a8"
     }
   ]
 }

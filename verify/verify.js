@@ -5,14 +5,21 @@
  * One-shot acceptance service ("verify").
  *
  * Phases:
- *   1. code tests        — node --test over the server test suite
+ *   1. code tests        — node --test over the server test suite (grammar,
+ *                          LR(1), the precedence/associativity resolver, the
+ *                          stale-response guard, HTTP API)
  *   2. page build check  — run web/build.js and validate emitted artifacts
  *   3. API/HTTP smoke    — against a running app service (APP_URL):
  *        - health endpoint responds ok
  *        - review page is served
- *        - conflict-free grammar yields a conflict-free LR(1) analysis
- *        - shift/reduce grammar yields stable first-conflict evidence
- *        - reduce/reduce grammar yields stable first-conflict evidence
+ *        - conflict-free grammar: conflict-free analysis, no strategy needed,
+ *          resolved table identical to the review table
+ *        - + / * ambiguous grammar: minimal 2-level policy (* above +), every
+ *          shift/reduce conflict itemised with level/associativity/final action
+ *        - ^ recursive grammar: right-associative one-level policy, the
+ *          same-priority tie uniquely shifts
+ *        - reduce/reduce grammar: first conflict kept, no available strategy
+ *        - invalid grammar: located validation errors
  *
  * Exits 0 when every check passes, 1 otherwise.
  */
@@ -148,8 +155,10 @@ async function main() {
       assert(res.status === 200, `GET / -> HTTP ${res.status}`);
       const html = await res.text();
       assert(html.includes('id="grammar-form"'), 'page does not contain the review form');
-      const js = await fetch(`${APP_URL}/app.js`);
-      assert(js.status === 200, `GET /app.js -> HTTP ${js.status}`);
+      for (const asset of ['app.js', 'stale-guard.js', 'styles.css']) {
+        const r = await fetch(`${APP_URL}/${asset}`);
+        assert(r.status === 200, `GET /${asset} -> HTTP ${r.status}`);
+      }
       return 'page and assets reachable';
     });
 
@@ -168,7 +177,84 @@ async function main() {
       const accepts = data.analysis.actionTable.flatMap((r) => Object.values(r.actions).flat())
         .filter((a) => a.type === 'accept');
       assert(accepts.length === 1, 'expected exactly one accept action');
+      // No strategy needed and the resolved table stays identical to review.
+      assert(data.analysis.strategy.status === 'unneeded', 'expected no strategy to be needed');
+      assert(data.analysis.strategy.tableMatchesReview === true, 'table consistency flag missing');
+      assert(
+        JSON.stringify(data.analysis.resolvedActionTable.map((r) => r.actions))
+          === JSON.stringify(data.analysis.actionTable.map((r) => r.actions)),
+        'resolved table must equal the review table when there are no conflicts');
       return `states=${data.analysis.states.length}`;
+    });
+
+    await check('+ / * ambiguous grammar: minimal two-level policy itemised per conflict', async () => {
+      const data = await postReview({
+        terminals: 'id + *',
+        nonterminals: 'E',
+        start: 'E',
+        productions: 'E -> E + E\nE -> E * E\nE -> id',
+      });
+      assert(data.ok === true, `review failed: ${JSON.stringify(data.errors)}`);
+      assert(data.analysis.conflictFree === false, 'expected conflicts');
+      const st = data.analysis.strategy;
+      assert(st.status === 'resolved', `expected resolved policy, got ${st.status}`);
+      assert(st.exact === true, 'policy must be an exact minimum-level solution');
+      assert(st.levelCount === 2, `expected 2 levels (* above +), got ${st.levelCount}`);
+      assert(st.levels[0].symbols.map((s) => s.symbol).includes('+'), 'level 1 must hold +');
+      assert(st.levels[1].symbols.map((s) => s.symbol).includes('*'), 'level 2 must hold *');
+      assert(st.conflicts.length === data.analysis.conflictCount, 'every conflict must be itemised');
+
+      const finals = { shift: 0, reduce: 0 };
+      for (const c of st.conflicts) {
+        assert(c.type === 'shift-reduce', `I${c.state}/${c.lookahead} must be shift/reduce`);
+        assert(c.actions.length === 2, 'competing actions must be presented');
+        assert(c.resolution.resolvable === true, 'decision must be resolvable');
+        assert(['level', 'associativity'].includes(c.resolution.basis), 'decision basis missing');
+        assert(c.resolution.precedence.length === 2, 'both precedence operands missing');
+        for (const p of c.resolution.precedence) {
+          assert(p && Number.isInteger(p.level), 'precedence level missing');
+        }
+        assert(c.resolution.finalAction, 'final action missing');
+        assert(['shift', 'reduce'].includes(c.resolution.finalAction.type), 'bad final action');
+        finals[c.resolution.finalAction.type] += 1;
+      }
+      // Precedence semantics: * vs + => shift (build products); + vs * => reduce.
+      const starVsPlus = st.conflicts.find(
+        (c) => c.lookahead === '*' && c.resolution.precedence[1].symbol === '+');
+      assert(starVsPlus && starVsPlus.resolution.finalAction.type === 'shift', '* above + must shift');
+      const plusVsStar = st.conflicts.find(
+        (c) => c.lookahead === '+' && c.resolution.precedence[1].symbol === '*');
+      assert(plusVsStar && plusVsStar.resolution.finalAction.type === 'reduce', '* above + must reduce on +');
+      // Every conflict cell collapses to exactly one action in the resolved table.
+      for (const c of st.conflicts) {
+        const cell = data.analysis.resolvedActionTable[c.state].actions[c.lookahead];
+        assert(Array.isArray(cell) && cell.length === 1, `cell I${c.state}/${c.lookahead} must converge to one action`);
+      }
+      return `levels=${st.levelCount} shifts=${finals.shift} reduces=${finals.reduce}`;
+    });
+
+    await check('^ recursive grammar: right-associative unique tie-break', async () => {
+      const data = await postReview({
+        terminals: 'id ^',
+        nonterminals: 'E',
+        start: 'E',
+        productions: 'E -> E ^ E\nE -> id',
+      });
+      assert(data.ok === true, `review failed: ${JSON.stringify(data.errors)}`);
+      assert(data.analysis.conflictFree === false, 'expected a conflict');
+      const st = data.analysis.strategy;
+      assert(st.status === 'resolved', `expected resolved policy, got ${st.status}`);
+      assert(st.levelCount === 1, `expected one level, got ${st.levelCount}`);
+      assert(st.levels[0].symbols[0].symbol === '^', 'level symbol must be ^');
+      assert(st.levels[0].symbols[0].associativity === 'right', '^ must be right-associative');
+      assert(st.conflicts.length === 1, 'expected exactly one same-priority conflict');
+      const d = st.conflicts[0].resolution;
+      assert(d.basis === 'associativity', 'same-level tie must be an associativity decision');
+      assert(d.associativity === 'right', '^ must be right-associative');
+      assert(d.finalAction.type === 'shift', 'right-associative tie must uniquely shift');
+      const cell = data.analysis.resolvedActionTable[st.conflicts[0].state].actions['^'];
+      assert(cell.length === 1 && cell[0].type === 'shift', 'resolved cell must be the unique shift');
+      return 'right-assoc shift';
     });
 
     await check('shift/reduce conflict evidence', async () => {
@@ -183,10 +269,15 @@ async function main() {
       const c = data.analysis.firstConflict;
       assertConflictEvidence(c, 'shift-reduce');
       simulatePrefix(data.analysis, c);
+      // A lone '+' is a left-associative self-conflict that reduces.
+      const st = data.analysis.strategy;
+      assert(st.status === 'resolved', 'plus-only grammar must be resolvable');
+      assert(st.conflicts.every((d) => d.resolution.finalAction.type === 'reduce'),
+        'left-associative + ties must reduce');
       return `state=I${c.state} lookahead=${c.lookahead} actions=${c.actions.map((a) => a.short).join(' vs ')}`;
     });
 
-    await check('reduce/reduce conflict evidence', async () => {
+    await check('reduce/reduce conflict: first conflict kept and no strategy exists', async () => {
       const data = await postReview({
         terminals: 'x',
         nonterminals: 'S A B',
@@ -198,6 +289,19 @@ async function main() {
       const c = data.analysis.firstConflict;
       assertConflictEvidence(c, 'reduce-reduce');
       simulatePrefix(data.analysis, c);
+      const st = data.analysis.strategy;
+      assert(st.status === 'unresolvable', 'reduce/reduce must have no available strategy');
+      assert(st.levelCount === 0, 'no precedence levels may be emitted for reduce/reduce');
+      assert(st.resolvedConflictCount === 0 && st.unresolvedConflictCount === 1, 'counts mismatch');
+      const d = st.conflicts[0];
+      assert(d.resolution.resolvable === false, 'decision must stay unresolved');
+      assert(d.resolution.finalAction === null, 'no final action may be chosen');
+      assert(d.actions.length === 2, 'both competing productions must be retained');
+      // The unresolved cell keeps BOTH actions: no default shift / prod-order pick.
+      const cell = data.analysis.resolvedActionTable[c.state].actions[c.lookahead];
+      assert(cell.length === 2, 'unresolved cell must retain both competing actions');
+      assert(cell.map((a) => a.short).join(',') === c.actions.map((a) => a.short).join(','),
+        'retained actions must match the raw review actions');
       return `state=I${c.state} lookahead=${c.lookahead} actions=${c.actions.map((a) => a.short).join(' vs ')}`;
     });
 

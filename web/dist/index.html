@@ -72,6 +72,8 @@
 
     <div id="conflict-panel" class="result-block" hidden></div>
 
+    <div id="strategy-panel" class="result-block" hidden></div>
+
     <details id="nullable-details" class="result-block" hidden>
       <summary><h3 style="display:inline">Nullable 与 FIRST 集合</h3></summary>
       <div id="nullable-first"></div>
@@ -83,8 +85,13 @@
     </details>
 
     <details id="table-details" class="result-block" hidden>
-      <summary><h3 style="display:inline">ACTION / GOTO 动作表</h3></summary>
+      <summary><h3 style="display:inline">ACTION / GOTO 动作表（规范 LR(1) 原始动作，冲突单元并列显示）</h3></summary>
       <div class="table-wrap" id="action-table"></div>
+    </details>
+
+    <details id="resolved-table-details" class="result-block" hidden>
+      <summary><h3 style="display:inline">裁决后 ACTION / GOTO 动作表（按稳定策略收敛）</h3></summary>
+      <div class="table-wrap" id="resolved-action-table"></div>
     </details>
   </section>
 </main>
@@ -93,6 +100,7 @@
   <p>草稿仅保存在本浏览器（localStorage）中。健康检查：<code>/healthz</code>。</p>
 </footer>
 
+<script src="stale-guard.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
