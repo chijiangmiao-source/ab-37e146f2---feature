@@ -17,12 +17,15 @@
   const warningList = document.getElementById('warning-list');
   const summaryPanel = document.getElementById('summary-panel');
   const conflictPanel = document.getElementById('conflict-panel');
+  const resolutionPanel = document.getElementById('resolution-panel');
   const nullableDetails = document.getElementById('nullable-details');
   const nullableFirst = document.getElementById('nullable-first');
   const statesDetails = document.getElementById('states-details');
   const statesEl = document.getElementById('states');
   const tableDetails = document.getElementById('table-details');
   const tableEl = document.getElementById('action-table');
+  const resolvedTableDetails = document.getElementById('resolved-table-details');
+  const resolvedTableEl = document.getElementById('resolved-action-table');
 
   const EXAMPLE = {
     terminals: 'id + * ( )',
@@ -94,7 +97,8 @@
   }
 
   function resetResultPanels() {
-    for (const p of [errorPanel, summaryPanel, conflictPanel, nullableDetails, statesDetails, tableDetails]) {
+    for (const p of [errorPanel, summaryPanel, conflictPanel, resolutionPanel,
+      nullableDetails, statesDetails, tableDetails, resolvedTableDetails]) {
       p.hidden = true;
     }
     statusRegion.innerHTML = '';
@@ -241,8 +245,7 @@
     statesDetails.hidden = false;
   }
 
-  function renderActionTable(a) {
-    tableEl.innerHTML = '';
+  function buildActionTable(a, rows) {
     const terminals = a.terminals;
     const nonterminals = a.nonterminals;
     const table = el('table');
@@ -254,7 +257,7 @@
     table.appendChild(thead);
 
     const tbody = el('tbody');
-    for (const row of a.actionTable) {
+    for (const row of rows) {
       const tr = el('tr');
       tr.appendChild(el('td', { class: 'state-head' }, document.createTextNode(`I${row.state}`)));
       for (const t of terminals) {
@@ -280,8 +283,166 @@
       tbody.appendChild(tr);
     }
     table.appendChild(tbody);
-    tableEl.appendChild(table);
+    return table;
+  }
+
+  function renderActionTable(a) {
+    tableEl.innerHTML = '';
+    tableEl.appendChild(buildActionTable(a, a.actionTable));
     tableDetails.hidden = false;
+  }
+
+  function renderResolvedActionTable(a) {
+    resolvedTableEl.innerHTML = '';
+    resolvedTableEl.appendChild(buildActionTable(a, a.resolvedActionTable));
+    resolvedTableDetails.hidden = false;
+  }
+
+  const assocText = (assoc) => (assoc === 'right' ? '右结合' : assoc === 'left' ? '左结合' : '—');
+
+  function renderCompetingActions(actions) {
+    const pair = el('div', { class: 'action-pair' });
+    for (const act of actions) {
+      const box = el('div', { class: 'action-box' });
+      box.appendChild(el('h4', null, [
+        actionBadge(act),
+        document.createTextNode(' '),
+        document.createTextNode(act.text),
+      ]));
+      if (act.productionText) {
+        box.appendChild(el('div', { class: 'rule' }, document.createTextNode(`产生式：${act.productionText}`)));
+      }
+      const ul = el('ul', { class: 'competing-items' });
+      for (const it of act.items) ul.appendChild(el('li', null, document.createTextNode(it.text)));
+      box.appendChild(ul);
+      pair.appendChild(box);
+    }
+    return pair;
+  }
+
+  // Stable two-level (in general, k-level) precedence/associativity strategy,
+  // rendered item by item for every shift/reduce conflict, plus the
+  // unsolvable-evidence view when no strategy exists.
+  function renderResolution(a) {
+    const r = a.resolution;
+    if (!r) return;
+    const cardClass = !r.needed ? 'resolution-ok' : r.possible ? 'resolvable' : 'blocked';
+    const card = el('div', { class: `resolution-card ${cardClass}` });
+
+    const heading = !r.needed
+      ? '冲突裁决审计：无需策略'
+      : r.possible
+        ? '稳定冲突裁决策略（按展望终结符与产生式最右终结符优先级；不使用默认移进）'
+        : '冲突裁决审计：不存在可用稳定策略';
+    card.appendChild(el('h3', null, document.createTextNode(heading)));
+    card.appendChild(el('p', { class: 'resolution-summary' }, document.createTextNode(r.summary || '')));
+
+    if (r.levels && r.levels.length) {
+      card.appendChild(el('h4', null, document.createTextNode('优先级层级（编号越小结合越紧）')));
+      const lvlTable = el('table', { class: 'level-table' });
+      lvlTable.appendChild(el('thead', null, el('tr', null, [
+        el('th', null, document.createTextNode('层级')),
+        el('th', null, document.createTextNode('终结符')),
+        el('th', null, document.createTextNode('结合性')),
+      ])));
+      const lvlBody = el('tbody');
+      for (const g of r.levels) {
+        lvlBody.appendChild(el('tr', null, [
+          el('td', { class: 'sym' }, document.createTextNode(`第 ${g.level} 层`)),
+          el('td', { class: 'sym' }, document.createTextNode(g.terminals.map((t) => t.symbol).join('　'))),
+          el('td', null, el('span', null,
+            document.createTextNode(g.terminals.map((t) => `${t.symbol}:${assocText(t.associativity)}`).join('　')))),
+        ]));
+      }
+      lvlTable.appendChild(lvlBody);
+      card.appendChild(lvlTable);
+    }
+
+    if (r.possible && r.decisions.length) {
+      card.appendChild(el('h4', null,
+        document.createTextNode(`逐项裁决（共 ${r.decisions.length} 处移进/归约冲突）`)));
+      const decTable = el('table', { class: 'decision-table' });
+      decTable.appendChild(el('thead', null, el('tr', null, [
+        el('th', null, document.createTextNode('状态')),
+        el('th', null, document.createTextNode('展望符')),
+        el('th', null, document.createTextNode('归约终结符(层)')),
+        el('th', null, document.createTextNode('展望符(层)')),
+        el('th', null, document.createTextNode('结合性')),
+        el('th', null, document.createTextNode('最终动作')),
+        el('th', null, document.createTextNode('裁决依据')),
+      ])));
+      const decBody = el('tbody');
+      for (const d of r.decisions) {
+        const winnerBadge = d.winner === 'shift'
+          ? el('span', { class: 'badge shift' }, document.createTextNode('移进'))
+          : el('span', { class: 'badge reduce' }, document.createTextNode('归约'));
+        decBody.appendChild(el('tr', null, [
+          el('td', { class: 'sym' }, document.createTextNode(`I${d.state}`)),
+          el('td', { class: 'sym' }, document.createTextNode(d.lookahead)),
+          el('td', { class: 'sym' }, document.createTextNode(
+            `${d.reduceTerminal}（第 ${d.reduceTerminalLevel} 层）`)),
+          el('td', { class: 'sym' }, document.createTextNode(
+            `${d.shiftTerminal}（第 ${d.lookaheadLevel} 层）`)),
+          el('td', null, document.createTextNode(assocText(d.associativity))),
+          el('td', null, [winnerBadge, document.createTextNode(' '),
+            el('span', { class: 'sym' }, document.createTextNode(d.winnerShort))]),
+          el('td', { class: 'rule-cell' }, document.createTextNode(d.rule)),
+        ]));
+      }
+      decTable.appendChild(decBody);
+      card.appendChild(decTable);
+
+      // Expanded per-conflict detail with competing items and prefix evidence.
+      for (const d of r.decisions) {
+        const det = el('details', { class: 'decision-detail' });
+        det.appendChild(el('summary', null, document.createTextNode(
+          `I${d.state} · 展望符 ${d.lookahead} · 最终${d.winner === 'shift' ? '移进' : '归约'}（${d.winnerShort}）`)));
+        det.appendChild(el('div', { class: 'rule' }, document.createTextNode(d.rule)));
+        if (d.reduceProductionText) {
+          det.appendChild(el('div', { class: 'rule' },
+            document.createTextNode(`归约产生式：${d.reduceProductionText}`)));
+        }
+        det.appendChild(renderCompetingActions(d.actions));
+        if (d.prefix && d.prefix.states) {
+          const ev = el('div', { class: 'prefix-evidence' });
+          ev.appendChild(el('div', null, document.createTextNode('可核查的前缀证据：')));
+          ev.appendChild(el('div', { class: 'path' },
+            document.createTextNode(d.prefix.states.map((s) => `I${s}`).join(' → '))));
+          ev.appendChild(el('div', { class: 'path' }, document.createTextNode(
+            `读入前缀：${d.prefix.symbols.length ? d.prefix.symbols.join(' ') : '（空前缀）'}；再读入展望符 ${d.lookahead}`)));
+          det.appendChild(ev);
+        }
+        card.appendChild(det);
+      }
+    } else if (r.firstUnresolved) {
+      const u = r.firstUnresolved;
+      card.appendChild(el('h4', null, document.createTextNode('首个无法裁决的冲突及竞争项目')));
+      const typeLabel = u.kind === 'reduce-reduce' ? '归约/归约冲突（reduce/reduce）'
+        : '移进/归约冲突（shift/reduce）';
+      card.appendChild(el('p', null, document.createTextNode(
+        `状态 I${u.state}，展望符 ${u.lookahead}，类型：${typeLabel}。`)));
+      card.appendChild(el('p', { class: 'blocked-reason' }, document.createTextNode(u.reasonText)));
+      card.appendChild(renderCompetingActions(u.actions));
+      if (u.prefix && u.prefix.states) {
+        const ev = el('div', { class: 'prefix-evidence' });
+        ev.appendChild(el('div', null, document.createTextNode('可核查的前缀证据：')));
+        ev.appendChild(el('div', { class: 'path' },
+          document.createTextNode(u.prefix.states.map((s) => `I${s}`).join(' → '))));
+        ev.appendChild(el('div', { class: 'path' }, document.createTextNode(
+          `读入前缀：${u.prefix.symbols.length ? u.prefix.symbols.join(' ') : '（空前缀）'}；再读入展望符 ${u.lookahead}`)));
+        card.appendChild(ev);
+      }
+      const stateList = el('ul', { class: 'state-items' });
+      for (const it of u.stateItems) {
+        stateList.appendChild(el('li', { class: it.kernel ? 'kernel' : '' }, document.createTextNode(it.text)));
+      }
+      card.appendChild(el('h4', null,
+        document.createTextNode(`状态 I${u.state} 的全部 LR(1) 项目（粗体为核项目）`)));
+      card.appendChild(stateList);
+    }
+
+    resolutionPanel.appendChild(card);
+    resolutionPanel.hidden = false;
   }
 
   function renderResult(result, runId, generation) {
@@ -312,6 +473,8 @@
       errorPanel.hidden = false;
     }
     if (!a.conflictFree && a.firstConflict) renderConflict(a.firstConflict);
+    renderResolution(a);
+    if (a.resolution && a.resolution.possible) renderResolvedActionTable(a);
     renderNullableFirst(a);
     renderStates(a);
     renderActionTable(a);

@@ -101,6 +101,71 @@ test('POST /api/review reports shift/reduce conflict evidence', () =>
     assert.equal(data.analysis.firstConflict.type, 'shift-reduce');
   }));
 
+test('POST /api/review returns a deterministic two-level strategy for +/*', () =>
+  withServer(async (port) => {
+    const res = await request(
+      port,
+      'POST',
+      '/api/review',
+      JSON.stringify({
+        terminals: 'id + *',
+        nonterminals: 'E',
+        start: 'E',
+        productions: 'E -> E + E\nE -> E * E\nE -> id',
+      })
+    );
+    const data = JSON.parse(res.body);
+    assert.equal(data.ok, true);
+    const r = data.analysis.resolution;
+    assert.equal(r.needed, true);
+    assert.equal(r.possible, true);
+    assert.equal(r.levels.length, 2);
+    assert.deepEqual(r.levels[0].terminals.map((t) => t.symbol), ['*']);
+    assert.deepEqual(r.levels[1].terminals.map((t) => t.symbol), ['+']);
+    for (const d of r.decisions) {
+      assert.ok(['shift', 'reduce'].includes(d.winner));
+      assert.equal(typeof d.rule, 'string');
+    }
+    assert.ok(Array.isArray(data.analysis.resolvedActionTable));
+  }));
+
+test('POST /api/review reports ^ as right-associative and reduce/reduce as unsolvable', () =>
+  withServer(async (port) => {
+    const caret = await request(
+      port,
+      'POST',
+      '/api/review',
+      JSON.stringify({
+        terminals: 'id ^',
+        nonterminals: 'E',
+        start: 'E',
+        productions: 'E -> E ^ E\nE -> id',
+      })
+    );
+    const caretData = JSON.parse(caret.body);
+    const rr0 = caretData.analysis.resolution;
+    assert.equal(rr0.possible, true);
+    assert.equal(rr0.levels[0].terminals[0].associativity, 'right');
+    assert.equal(rr0.decisions[0].winner, 'shift');
+
+    const rr = await request(
+      port,
+      'POST',
+      '/api/review',
+      JSON.stringify({
+        terminals: 'x',
+        nonterminals: 'S A B',
+        start: 'S',
+        productions: 'S -> A\nS -> B\nA -> x\nB -> x',
+      })
+    );
+    const rrData = JSON.parse(rr.body);
+    const res = rrData.analysis.resolution;
+    assert.equal(res.possible, false);
+    assert.equal(res.firstUnresolved.kind, 'reduce-reduce');
+    assert.equal(res.firstUnresolved.actions.length, 2);
+  }));
+
 test('malformed JSON body yields 400', () =>
   withServer(async (port) => {
     const res = await request(port, 'POST', '/api/review', '{not json');
